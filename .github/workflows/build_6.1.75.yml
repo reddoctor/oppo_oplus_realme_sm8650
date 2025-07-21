@@ -66,7 +66,7 @@ on:
           - 'true'
           - 'false'
       kpm_enable:
-        description: '是否安装KPM支持)'
+        description: '是否安装KPM支持'
         required: true
         type: choice
         default: 'false'
@@ -387,6 +387,7 @@ jobs:
             - BBR/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
             - 三星SSG IO调度器支持：${{ github.event.inputs.ssg_enable }}
             - 风驰内核支持：${{ github.event.inputs.scx_enable }}
+            - KPM支持：${{ github.event.inputs.kpm_enable }}
             - 推荐系统：ColorOS 15 / RealmeUI 6.0
             - SukiSU管理器下载：[SukiSU-Ultra](https://github.com/ShirkNeko/SukiSU-Ultra/releases)
             ### ⏫️ 更新内容：
