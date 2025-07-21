@@ -65,6 +65,14 @@ on:
         options:
           - 'true'
           - 'false'
+      kpm_enable:
+        description: '是否安装KPM支持)'
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'true'
+          - 'false'
       kernel_suffix:
         description: '内核后缀(留空默认,开头别加连字符)'
         required: false
@@ -294,11 +302,13 @@ jobs:
       - name: 应用patch_linux并修补内核
         run: |
           cd kernel_workspace/common/out/arch/arm64/boot
-          curl -LO https://github.com/ShirkNeko/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
-          chmod +x patch_linux
-          ./patch_linux
-          rm -f Image
-          mv oImage Image
+          if [[ ${{ github.event.inputs.kpm_enable }} == "true" ]]; then
+            curl -LO https://github.com/ShirkNeko/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
+            chmod +x patch_linux
+            ./patch_linux
+            rm -f Image
+            mv oImage Image
+          fi
           
       - name: 克隆 AnyKernel3 并打包
         run: |
