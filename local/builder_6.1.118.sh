@@ -19,6 +19,8 @@ read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APP
 APPLY_LZ4=${APPLY_LZ4:-y}
 read -p "是否应用 lz4kd 补丁？(y/n，默认：y): " APPLY_LZ4KD
 APPLY_LZ4KD=${APPLY_LZ4KD:-y}
+read -p "是否启用网络功能增强优化配置？(y/n，默认：y): " APPLY_BETTERNET
+APPLY_BETTERNET=${APPLY_BETTERNET:-y}
 read -p "是否添加 BBR 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
 APPLY_BBR=${APPLY_BBR:-n}
 read -p "是否启用三星SSG IO调度器？(y/n，默认：y): " APPLY_SSG
@@ -34,6 +36,7 @@ echo "使用 patch_linux: $USE_PATCH_LINUX"
 echo "使用 kprobes钩子: $APPLY_KPROBES"
 echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
+echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
 echo "应用 BBR 等算法: $APPLY_BBR"
 echo "启用三星SSG IO调度器: $APPLY_SSG"
 echo "应用风驰内核驱动: $APPLY_SCX"
@@ -182,6 +185,39 @@ CONFIG_CRYPTO_LZ4KD=y
 CONFIG_CRYPTO_842=y
 EOF
 
+fi
+
+# ===== 启用网络功能增强优化配置 =====
+if [[ "$APPLY_BETTERNET" == "y" || "$APPLY_BETTERNET" == "Y" ]]; then
+  echo ">>> 正在启用网络功能增强优化配置..."
+  echo "CONFIG_BPF_STREAM_PARSER=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_NETFILTER_XT_SET=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_MAX=65534" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_BITMAP_IP=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_BITMAP_IPMAC=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_BITMAP_PORT=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_IP=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_IPMARK=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_IPPORT=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_IPPORTIP=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_IPPORTNET=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_IPMAC=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_MAC=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_NETPORTNET=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_NET=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_NETNET=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_NETPORT=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_HASH_NETIFACE=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_SET_LIST_SET=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP6_NF_NAT=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP6_NF_TARGET_MASQUERADE=y" >> "$DEFCONFIG_FILE"
+  #由于部分机型的vintf兼容性检测规则，在开启CONFIG_IP6_NF_NAT后开机会出现"您的设备内部出现了问题。请联系您的设备制造商了解详情。"的提示，故添加一个配置修复补丁，在编译内核时隐藏CONFIG_IP6_NF_NAT=y但不影响对应功能编译
+  cd common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/config.patch
+  patch -p1 -F 3 < config.patch || true
+  cd ..
 fi
 
 # ===== 添加 BBR 等一系列拥塞控制算法 =====

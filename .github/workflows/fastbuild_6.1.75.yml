@@ -1,4 +1,4 @@
-name: 欧加真 6.1.57 Android 14 通用OKI内核
+name: 加速版构建 6.1.75 欧加真OKI内核
 
 env:
   TZ: Asia/Shanghai
@@ -93,31 +93,85 @@ jobs:
     outputs:
       ksuver: ${{ steps.ksu_version.outputs.ksuver }}
     steps:
-      - name: 最大化建筑空间
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 8192
-          temp-reserve-mb: 2048
-          swap-size-mb: 8192
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-
       - name: 安装配置环境依赖
         run: |
-          sudo apt update && sudo apt upgrade -y
-          sudo apt-get install curl bison flex make binutils dwarves git lld pahole zip perl make gcc python3 python-is-python3 bc libssl-dev libelf-dev -y
-          sudo rm -rf ./llvm.sh
-          sudo wget https://apt.llvm.org/llvm.sh
-          sudo chmod +x llvm.sh
-          sudo ./llvm.sh 20 all
+          sudo apt-mark hold firefox
+          sudo apt-mark hold libc-bin
+          sudo apt-mark hold man-db
+          sudo rm -rf /var/lib/man-db/auto-update
+          sudo apt update
+          sudo apt-get install -y --no-install-recommends \
+            curl bison flex make binutils git perl gcc python3 \
+            python-is-python3 bc libssl-dev libelf-dev \
+            bc aria2 zip unzip ccache
 
-      - name: 初始化源码仓库
+      - name: 配置ccache目录
         run: |
-          rm -rf kernel_workspace && mkdir kernel_workspace && cd kernel_workspace
+          echo "CCACHE_DIR=$HOME/.ccache_6.1.75" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=3G" >> $GITHUB_ENV
+          echo "当前磁盘空间："
+          df -h
+          echo "当前构建内核版本：6.1.75"
+          rm -rf kernel_platform
+
+      - name: 载入当前版本内核的 ccache缓存
+        uses: actions/cache@v3
+        id: ccache-restore
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-6.1.75-${{ runner.os }}-main
+          restore-keys: |
+            ccache-6.1.75-${{ runner.os }}-
+            ccache-6.1.75-
+      
+      - name: 初始化并配置ccache
+        run: |
+          # 设置ccache环境变量
+          export CCACHE_COMPILERCHECK="%compiler% -dumpmachine; %compiler% -dumpversion"
+          export CCACHE_NOHASHDIR="true"
+          export CCACHE_HARDLINK="true"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CCACHE_MAXSIZE="${{ env.CCACHE_MAXSIZE }}"
+          
+          # 确保ccache目录存在
+          mkdir -p "$CCACHE_DIR"
+          
+          # 每次运行都重新配置缓存大小
+          echo "配置ccache缓存大小为: $CCACHE_MAXSIZE"
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -o compression=true
+          
+          # 显示初始缓存状态
+          echo "ccache初始状态:"
+          ccache -s
+          
+          # 如果缓存恢复命中，显示详细信息
+          if [ "${{ steps.ccache-restore.outputs.cache-hit }}" == 'true' ]; then
+            echo "ccache缓存命中详情:"
+            ccache -sv
+          fi
+      
+      - name: 初始化源码仓库及llvm-Clang20工具链
+        run: |
+          rm -rf kernel_workspace
+          mkdir kernel_workspace
+          cd kernel_workspace
           echo "正在克隆源码仓库..."
-          git clone --depth=1 https://github.com/cctv18/android_kernel_common_oneplus_sm8650 -b oneplus/sm8650_u_14.0.0_oneplus12 common
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/android_kernel_common_oneplus_sm8650/archive/refs/heads/oneplus/sm8650_v_15.0.0_oneplus12.zip -o common.zip
+          unzip -q common.zip
+          mv "android_kernel_common_oneplus_sm8650-oneplus-sm8650_v_15.0.0_oneplus12" common
+          rm -rf common.zip
+          echo "正在克隆llvm-Clang20工具链..."
+          rm -rf clang20
+          mkdir -p clang20
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang20-r547379/clang-r547379.zip -o clang.zip
+          unzip -q clang.zip -d clang20
+          rm -rf clang.zip
+          echo "正在克隆构建工具..."
+          rm -rf build-tools
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang20-r547379/build-tools.zip -o build-tools.zip
+          unzip -q build-tools.zip
+          rm -rf build-tools.zip
           echo "正在去除 ABI 保护 & 去除 dirty 后缀..."
           rm common/android/abi_gki_protected_exports_* || true
           for f in common/scripts/setlocalversion; do
@@ -125,20 +179,70 @@ jobs:
             sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' "$f"
           done
 
-      - name: 添加 SukiSU-Ultra
+      - name: 添加 SukiSU Ultra
         id: ksu_version
         run: |
+          # 进入内核工作目录
           cd kernel_workspace
-          #if [[ "${{ env.KERNELSU_VARIANT }}" == "SukiSU-Ultra" ]]; then
-          #  echo "BRANCH='-s susfs-main'" >> $GITHUB_ENV
-          #fi
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/refs/heads/main/kernel/setup.sh" | bash -s susfs-main
           cd ./KernelSU
-          KSU_VERSION=$(expr $(/usr/bin/git rev-list --count main) "+" 10700)
+          export KSU_VERSION=$KSU_VERSION
+          # 尝试最多 3 次获取 KernelSU API 版本号
+          for i in {1..3}; do
+            # 从远程 Makefile 中提取 KSU_API_VERSION
+            KSU_API_VERSION=$(curl -s "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/susfs-main/kernel/Makefile" | 
+              # 查找第一个包含版本定义的行
+              grep -m1 "KSU_VERSION_API :=" | 
+              # 提取等号后的值
+              awk -F'= ' '{print $2}' | 
+              # 删除所有空白字符
+              tr -d '[:space:]')
+            # 如果成功获取到版本号则跳出循环，否则等待 1 秒后重试
+            [ -n "$KSU_API_VERSION" ] && break || sleep 1
+          done
+          # 如果获取失败，使用默认版本号 3.1.7
+          [ -z "$KSU_API_VERSION" ] && KSU_API_VERSION="3.1.7"
+          # 将 API 版本号存储到 GitHub 环境变量
+          echo "KSU_API_VERSION=$KSU_API_VERSION" >> $GITHUB_ENV
+          # 创建版本定义模板&版本格式函数
+          # KSU_VERSION_API: API 版本定义
+          # KSU_VERSION_FULL: 完整版本定义
+          VERSION_DEFINITIONS=$(cat << EOF
+          define get_ksu_version_full
+          v\\$1-SukiSU-cctv18
+          endef
+
+          KSU_VERSION_API := $KSU_API_VERSION
+          KSU_VERSION_FULL := v$KSU_API_VERSION-SukiSU-cctv18
+          EOF
+              )
+          # 清理内核 Makefile 中的旧版本定义
+          # 删除版本函数
+          sed -i '/define get_ksu_version_full/,/endef/d' kernel/Makefile
+          # 删除 API 版本定义
+          sed -i '/KSU_VERSION_API :=/d' kernel/Makefile
+          # 删除完整版本定义
+          sed -i '/KSU_VERSION_FULL :=/d' kernel/Makefile
+          # 在 REPO_OWNER 行后插入新版本定义
+          awk -v def="$VERSION_DEFINITIONS" '
+            # 当找到 REPO_OWNER 行时，插入版本定义并设置标记
+            /REPO_OWNER :=/ {print; print def; inserted=1; next}
+            # 打印所有行
+            1
+            # 如果未找到插入点，在文件末尾追加
+            END {if (!inserted) print def}
+          ' kernel/Makefile > kernel/Makefile.tmp && mv kernel/Makefile.tmp kernel/Makefile
+
+          # 生成自定义版本号（基于提交计数）, 失败时使用 114514
+          KSU_VERSION=$(expr $(git rev-list --count main) + 10700 2>/dev/null || echo 114514)
+          # 存储版本号到 GitHub 环境变量
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
           echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
-          export KSU_VERSION=$KSU_VERSION
-          sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=$KSU_VERSION/" kernel/Makefile
+
+          # 验证修改结果
+          grep -A10 "REPO_OWNER" kernel/Makefile  # 检查插入点后的内容
+          grep "KSU_VERSION_FULL" kernel/Makefile # 确认版本定义存在
+
 
       - name: 应用 SukiSU-Ultra & SUSFS 补丁
         run: |
@@ -267,7 +371,7 @@ jobs:
             wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/config.patch
             patch -p1 -F 3 < config.patch || true
           fi
-          
+
       - name: 添加 BBR 等一系列拥塞控制算法
         run: |
           if [[ "${{ github.event.inputs.bbr_enable }}" == "true" || "${{ github.event.inputs.bbr_enable }}" == "default" ]]; then
@@ -335,6 +439,24 @@ jobs:
            
       - name: 构建内核
         run: |
+          WORKDIR="$(pwd)"
+          export PATH="/usr/lib/ccache:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/clang20/bin:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/build-tools/bin:$PATH"
+          CLANG_DIR="$WORKDIR/kernel_workspace/clang20/bin"
+          CLANG_VERSION="$($CLANG_DIR/clang --version | head -n 1)"
+          LLD_VERSION="$($CLANG_DIR/ld.lld --version | head -n 1)"
+          echo "编译器信息:"
+          echo "Clang版本: $CLANG_VERSION"
+          echo "LLD版本: $LLD_VERSION"
+          pahole_version=$(pahole --version 2>/dev/null | head -n1); [ -z "$pahole_version" ] && echo "pahole版本：未安装" || echo "pahole版本：$pahole_version"
+          
+          export CCACHE_COMPILERCHECK="%compiler% -dumpmachine; %compiler% -dumpversion"
+          export CCACHE_NOHASHDIR="true"
+          export CCACHE_HARDLINK="true"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CCACHE_MAXSIZE="3G"
+          
           cd kernel_workspace
           if [[ ${{ github.event.inputs.scx_enable }} == "true" ]]; then
             git clone https://github.com/cctv18/sched_ext.git
@@ -343,8 +465,17 @@ jobs:
             cp -r ./sched_ext/* ./common/kernel/sched
           fi
           cd common
-          make -j$(nproc --all) LLVM=-20 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnuabeihf- CC=clang LD=ld.lld HOSTCC=clang HOSTLD=ld.lld O=out KCFLAGS+=-Wno-error gki_defconfig all
+          #在构建内核的同时清除不必要的.NET, Android NDK, Haskell, CodeQL运行库，清理空间且不阻塞后续步骤运行
+          sudo rm -rf /usr/share/dotnet &
+          sudo rm -rf /usr/local/lib/android &
+          sudo rm -rf /opt/ghc &
+          sudo rm -rf /opt/hostedtoolcache/CodeQL &
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD=ld.lld HOSTLD=ld.lld O=out KCFLAGS+=-Wno-error gki_defconfig all
           echo "内核编译完成！"
+          echo "ccache状态："
+          ccache -s
+          echo "编译后空间:"
+          df -h
          
       - name: 应用patch_linux并修补内核
         if: ${{ github.event.inputs.kpm_enable == 'true' }}
@@ -371,9 +502,9 @@ jobs:
             wget https://raw.githubusercontent.com/cctv18/oppo_oplus_realme_sm8650/refs/heads/main/zram.zip
           fi
           if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
-            zip -r ../AnyKernel3_SukiSU_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_A14_${{ github.event.inputs.kernel_suffix }}.zip ./*
+            zip -r ../AnyKernel3_SukiSU_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_A15_${{ github.event.inputs.kernel_suffix }}.zip ./*
           else
-            zip -r ../AnyKernel3_SukiSU_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_A14_${{ env.KERNEL_NAME }}.zip ./*
+            zip -r ../AnyKernel3_SukiSU_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_A15_${{ env.KERNEL_NAME }}.zip ./*
           fi
 
       - name: 上传 ZIP 工件
@@ -400,11 +531,11 @@ jobs:
       - name: 设置环境变量
         run: |
           if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
-            FULL_VERSION=${{ format('{0}.57-{1}', env.KERNEL_VERSION, github.event.inputs.kernel_suffix) }}
+            FULL_VERSION=${{ format('{0}.75-{1}', env.KERNEL_VERSION, github.event.inputs.kernel_suffix) }}
             echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_ENV
             export FULL_VERSION=$FULL_VERSION
           else
-            FULL_VERSION=${{ format('{0}.57-{1}', env.KERNEL_VERSION, env.KERNEL_NAME) }}
+            FULL_VERSION=${{ format('{0}.75-{1}', env.KERNEL_VERSION, env.KERNEL_NAME) }}
             echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_ENV
             export FULL_VERSION=$FULL_VERSION
           fi
@@ -412,7 +543,7 @@ jobs:
           TIME_FORM="$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
           echo "TIME=$TIME" >> $GITHUB_ENV
           echo "TIME_FORM=$TIME_FORM" >> $GITHUB_ENV
-          TAG_HEAD="OPPO+OPlus+Realme-A14-build"
+          TAG_HEAD="OPPO+OPlus+Realme-A15-build"
           echo "TAG_HEAD=$TAG_HEAD" >> $GITHUB_ENV
          
       - name: 创建发布
@@ -422,7 +553,7 @@ jobs:
           tag_name: "${{ env.TAG_HEAD }}-${{ env.TIME }}"
           name: "${{ env.TAG_HEAD }}-${{ env.FULL_VERSION }}"
           body: |
-            ### 📱 欧加真 Android 14 SukiSU-Ultra SM8650 通用内核 | 构建信息
+            ### 📱 欧加真 Android 15 SukiSU-Ultra SM8650 通用内核 | 构建信息
             - 内核版本号: ${{ env.FULL_VERSION }}
             - 编译时间: ${{ env.TIME_FORM }}
             - 机型：欧加真骁龙8Gen3 6.1 Android 14内核通用（基于一加12 Android 14 版官方OKI源码）
@@ -434,7 +565,7 @@ jobs:
             - BBR/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
             - 三星SSG IO调度器支持：${{ github.event.inputs.ssg_enable }}
             - 风驰内核支持：${{ github.event.inputs.scx_enable }}
-            - 推荐系统：ColorOS 14 / RealmeUI 5.0
+            - 推荐系统：ColorOS 15 / RealmeUI 6.0
             - SukiSU管理器下载：[SukiSU-Ultra](https://github.com/ShirkNeko/SukiSU-Ultra/releases)
             ### ⏫️ 更新内容：
             - 更新SukiSU Ultra至最新版本（${{ needs.build.outputs.ksuver }}）
