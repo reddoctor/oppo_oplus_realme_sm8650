@@ -81,14 +81,6 @@ on:
         options:
           - 'true'
           - 'false'
-      kpm_enable:
-        description: '是否安装KPM支持'
-        required: true
-        type: choice
-        default: 'false'
-        options:
-          - 'true'
-          - 'false'
       kernel_suffix:
         description: '内核后缀(留空默认,开头别加连字符)'
         required: false
@@ -358,13 +350,11 @@ jobs:
         if: ${{ github.event.inputs.kpm_enable == 'true' }}
         run: |
           cd kernel_workspace/common/out/arch/arm64/boot
-          if [[ ${{ github.event.inputs.kpm_enable }} == "true" ]]; then
-            curl -LO https://github.com/ShirkNeko/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
-            chmod +x patch_linux
-            ./patch_linux
-            rm -f Image
-            mv oImage Image
-          fi
+          curl -LO https://github.com/ShirkNeko/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
+          chmod +x patch_linux
+          ./patch_linux
+          rm -f Image
+          mv oImage Image
           
       - name: 克隆 AnyKernel3 并打包
         run: |
@@ -444,7 +434,6 @@ jobs:
             - BBR/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
             - 三星SSG IO调度器支持：${{ github.event.inputs.ssg_enable }}
             - 风驰内核支持：${{ github.event.inputs.scx_enable }}
-            - KPM支持：${{ github.event.inputs.kpm_enable }}
             - 推荐系统：ColorOS 15 / RealmeUI 6.0
             - SukiSU管理器下载：[SukiSU-Ultra](https://github.com/ShirkNeko/SukiSU-Ultra/releases)
             ### ⏫️ 更新内容：
